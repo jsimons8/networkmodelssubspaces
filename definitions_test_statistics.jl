@@ -55,7 +55,7 @@ function DInvSqrtCovMatEstimate(Mhat,OmegaW,q,element1,element2,BigCovMat=I(size
     Dp = R[1:r,1:q] * Ri2inv;
     ups_perp = zeros(ComplexF64,p,r);
     ups_perp[1:r,1:r] = I(r);
-    ups_perp[(r+1):p,1:r] = -Dp; #careful here
+    ups_perp[(r+1):p,1:r] = -Dp'; #careful here, ups_perp wants D not Dprime
     ei = zeros(q,1);
     ej = zeros(r,1);
     ei[element1,1] = 1;
@@ -138,3 +138,101 @@ function SimulateGraphtStat(mc_reps,sample_size,g,element1,element2)
     
 return waldresults
 end
+
+function JacobianSVD(null_hyp,Mhat,OmegaW,q,samplesize)
+    m = size(Mhat,1);
+    n = size(Mhat,2);
+    r = min(m,n);
+    #make left part of test stat
+    F = svd(Mhat)
+    Us = F.U[:,1:q];
+    #Unoise = F.U[:,q+1:n];
+    Σs = Diagonal(F.S[1:q]);
+    Vts = F.Vt[1:q,:];
+
+    D = zeros(q,q);
+    for g in 1:q,f in 1:q
+        D[g,f] = if g==f 0 else 1/(F.S[f]^2 - F.S[g]^2) end;
+    end
+
+    #make commutation matrix
+    K = zeros(m*n,m*n)
+    rowintarget = 1;
+    starter = 1;
+    hop = 0;
+    for k in 1:m*n
+        #check if we are one hop too many, i.e. hop m
+        if hop == m
+            hop = 0;
+            starter += 1;
+        end
+        rowintarget = starter + n * hop;
+        K[rowintarget,:] = I(m*n)[k,:];
+        hop += 1;
+    end
+
+
+    Bfac1 = vec(D) .* kron(Σs' * Vts, Us');
+    Bfac2 = vec(D) .* (kron(Us',Σs *Vts) * K);
+
+    BW = Bfac1+Bfac2;
+
+    Omega = BW * kron(I(n),OmegaW) * BW';
+    rh = vec(null_hyp'Us - I(q));
+    teststat = samplesize * rh'pinv(Omega) * rh;
+    
+    return teststat;
+end
+
+
+
+
+function WaldStatSingleVector(null_hyp_perp,Mhat,OmegaW,f,F,samplesize)
+    m = size(Mhat,1);
+    n = size(Mhat,2);
+    Fac=svd(Mhat);
+
+    Us = Fac.U[:,1:F];
+    Σs = Diagonal(Fac.S[1:F])
+    Vsp = Fac.Vt[1:F,:]
+    Un = Fac.U[:,(F+1):m]
+    Σn = Fac.S[F+1:m] |> Diagonal
+    Vn = Fac.Vt[F+1:m,:]
+    Df = zeros(F,F);
+    #singular vector of interest f = 1
+    u0f = null_hyp_perp
+    entryofinterestremoved = filter(x->x!=f,collect(1:F));
+    for g in entryofinterestremoved Df[g,g] = 1/(Σs[f,f]^2 - Σs[g,g]^2 ) end;
+    uf = Us[:,f]
+    vf = Vsp[f,:]
+    σf = Σs[f,f]
+    #make commutation matrix
+    K = zeros(m*n,m*n)
+    rowintarget = 1;
+    starter = 1;
+    hop = 0;
+    for k in 1:m*n
+        #check if we are one hop too many, i.e. hop m
+        if hop == m
+            hop = 0;
+            starter += 1;
+        end
+        rowintarget = starter + n * hop;
+        K[rowintarget,:] = I(m*n)[k,:];
+        hop += 1;
+    end
+
+    Bsummand1 = kron(vf' * σf , u0f'Us * Df * Us');
+    Bsummand2 = kron(uf', u0f'Us*Df*Σs * Vsp)*K;
+    Bsummand3 = kron(vf' * inv(σf), u0f' * Un * Un')
+
+    Bmat = Bsummand1+Bsummand2+Bsummand3;
+
+    Omega = (Bmat * kron(I(n),OmegaW) * Bmat')[1,1]
+    rh = null_hyp_perp'uf;
+    teststat = samplesize * rh^2/Omega;
+    return teststat
+end
+
+
+
